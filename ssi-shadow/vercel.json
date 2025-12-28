@@ -19,7 +19,19 @@
       "dest": "/api/main.py"
     },
     {
-      "src": "/(.*)",
+      "src": "^/static/(.*)",
+      "dest": "/dashboard/static/$1"
+    },
+    {
+      "src": "^/assets/(.*)",
+      "dest": "/dashboard/assets/$1"
+    },
+    {
+      "src": "^/favicon.ico",
+      "dest": "/dashboard/favicon.ico"
+    },
+    {
+      "src": "/.*",
       "dest": "/dashboard/index.html"
     }
   ]
