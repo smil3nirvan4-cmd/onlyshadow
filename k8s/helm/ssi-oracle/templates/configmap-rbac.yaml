@@ -1,0 +1,160 @@
+{{- /* =================================================================== */ -}}
+{{- /* CONFIGMAP                                                           */ -}}
+{{- /* =================================================================== */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}-config
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+data:
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+  
+  # Feature flags
+  ENABLE_TRUST_SCORE: {{ .Values.config.features.enableTrustScore | quote }}
+  ENABLE_ML_PREDICTIONS: {{ .Values.config.features.enableMLPredictions | quote }}
+  ENABLE_BID_OPTIMIZATION: {{ .Values.config.features.enableBidOptimization | quote }}
+  ENABLE_COST_SYNC: {{ .Values.config.features.enableCostSync | quote }}
+  
+  # Rate limiting
+  RATE_LIMIT_ENABLED: {{ .Values.config.rateLimiting.enabled | quote }}
+  RATE_LIMIT_RPM: {{ .Values.config.rateLimiting.requestsPerMinute | quote }}
+  RATE_LIMIT_BURST: {{ .Values.config.rateLimiting.burstSize | quote }}
+  
+  # Platform configuration
+  META_ENABLED: {{ .Values.config.platforms.meta.enabled | quote }}
+  META_TEST_MODE: {{ .Values.config.platforms.meta.testMode | quote }}
+  TIKTOK_ENABLED: {{ .Values.config.platforms.tiktok.enabled | quote }}
+  TIKTOK_TEST_MODE: {{ .Values.config.platforms.tiktok.testMode | quote }}
+  GOOGLE_ENABLED: {{ .Values.config.platforms.google.enabled | quote }}
+  GOOGLE_TEST_MODE: {{ .Values.config.platforms.google.testMode | quote }}
+---
+{{- /* =================================================================== */ -}}
+{{- /* SERVICE ACCOUNT                                                     */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "ssi-shadow.serviceAccountName" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: true
+{{- end }}
+---
+{{- /* =================================================================== */ -}}
+{{- /* RBAC - Role                                                         */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+rules:
+  # Allow reading ConfigMaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Allow reading Secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  # Allow creating events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ssi-shadow.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ssi-shadow.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+---
+{{- /* =================================================================== */ -}}
+{{- /* NETWORK POLICY                                                      */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ssi-shadow.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from Prometheus
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+    # Allow internal communication
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ssi-shadow.selectorLabels" . | nindent 14 }}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow external HTTPS (APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+{{- end }}

@@ -1,0 +1,271 @@
+# =============================================================================
+# S.S.I. SHADOW - Alertmanager Configuration
+# =============================================================================
+# Routes alerts to appropriate channels based on severity and component
+# =============================================================================
+
+global:
+  # SMTP configuration for email alerts
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@ssi-shadow.io'
+  smtp_auth_username: '${SMTP_USERNAME}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+  
+  # Slack configuration
+  slack_api_url: '${SLACK_WEBHOOK_URL}'
+  
+  # PagerDuty configuration
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+# Templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Inhibition rules - prevent duplicate alerts
+inhibit_rules:
+  # If API is down, don't alert for high latency
+  - source_matchers:
+      - alertname = "APIDown"
+    target_matchers:
+      - alertname = "APIHighLatencyP95"
+      - alertname = "APIHighLatencyP99"
+    equal:
+      - instance
+  
+  # If critical severity, inhibit warning
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal:
+      - alertname
+      - component
+
+# Routing tree
+route:
+  # Default receiver
+  receiver: 'slack-default'
+  
+  # Group alerts by these labels
+  group_by: ['alertname', 'component', 'severity']
+  
+  # How long to wait before sending first notification
+  group_wait: 30s
+  
+  # How long to wait before sending updated notification
+  group_interval: 5m
+  
+  # How long to wait before repeating notification
+  repeat_interval: 4h
+  
+  # Child routes
+  routes:
+    # ==========================================================================
+    # Critical alerts - PagerDuty + Slack + Telegram
+    # ==========================================================================
+    - matchers:
+        - severity = "critical"
+      receiver: 'pagerduty-critical'
+      continue: true
+      group_wait: 10s
+      repeat_interval: 1h
+    
+    - matchers:
+        - severity = "critical"
+      receiver: 'slack-critical'
+      continue: true
+    
+    - matchers:
+        - severity = "critical"
+      receiver: 'telegram-critical'
+    
+    # ==========================================================================
+    # Business alerts - Slack business channel
+    # ==========================================================================
+    - matchers:
+        - component = "business"
+      receiver: 'slack-business'
+      group_wait: 1m
+      repeat_interval: 2h
+    
+    # ==========================================================================
+    # ML alerts - Slack data team
+    # ==========================================================================
+    - matchers:
+        - component = "ml"
+      receiver: 'slack-data-team'
+      group_wait: 5m
+      repeat_interval: 6h
+    
+    # ==========================================================================
+    # Infrastructure alerts - Slack ops + OpsGenie
+    # ==========================================================================
+    - matchers:
+        - component =~ "infrastructure|redis"
+      receiver: 'slack-ops'
+      continue: true
+    
+    - matchers:
+        - component =~ "infrastructure|redis"
+        - severity = "critical"
+      receiver: 'opsgenie-infra'
+    
+    # ==========================================================================
+    # Platform integration alerts
+    # ==========================================================================
+    - matchers:
+        - component =~ "meta|tiktok|google|platforms"
+      receiver: 'slack-integrations'
+      group_wait: 2m
+      repeat_interval: 1h
+    
+    # ==========================================================================
+    # Warning alerts - Slack only
+    # ==========================================================================
+    - matchers:
+        - severity = "warning"
+      receiver: 'slack-warnings'
+      group_wait: 5m
+      repeat_interval: 4h
+
+# Receivers
+receivers:
+  # ===========================================================================
+  # Default Slack Channel
+  # ===========================================================================
+  - name: 'slack-default'
+    slack_configs:
+      - channel: '#ssi-shadow-alerts'
+        send_resolved: true
+        title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: '{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}danger{{ else }}warning{{ end }}{{ else }}good{{ end }}'
+        actions:
+          - type: button
+            text: 'Runbook 📖'
+            url: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+          - type: button
+            text: 'Dashboard 📊'
+            url: 'https://grafana.ssi-shadow.io'
+          - type: button
+            text: 'Silence 🔇'
+            url: '{{ template "slack.silenceurl" . }}'
+
+  # ===========================================================================
+  # Critical Slack Channel
+  # ===========================================================================
+  - name: 'slack-critical'
+    slack_configs:
+      - channel: '#ssi-shadow-critical'
+        send_resolved: true
+        title: '🚨 CRITICAL: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: 'danger'
+
+  # ===========================================================================
+  # Warning Slack Channel
+  # ===========================================================================
+  - name: 'slack-warnings'
+    slack_configs:
+      - channel: '#ssi-shadow-warnings'
+        send_resolved: true
+        title: '⚠️ {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: 'warning'
+
+  # ===========================================================================
+  # Business Slack Channel
+  # ===========================================================================
+  - name: 'slack-business'
+    slack_configs:
+      - channel: '#ssi-shadow-business'
+        send_resolved: true
+        title: '📊 Business Alert: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+
+  # ===========================================================================
+  # Data Team Slack Channel
+  # ===========================================================================
+  - name: 'slack-data-team'
+    slack_configs:
+      - channel: '#data-team'
+        send_resolved: true
+        title: '🤖 ML Alert: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+
+  # ===========================================================================
+  # Ops Slack Channel
+  # ===========================================================================
+  - name: 'slack-ops'
+    slack_configs:
+      - channel: '#ops'
+        send_resolved: true
+        title: '🔧 Infra Alert: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+
+  # ===========================================================================
+  # Integrations Slack Channel
+  # ===========================================================================
+  - name: 'slack-integrations'
+    slack_configs:
+      - channel: '#ssi-shadow-integrations'
+        send_resolved: true
+        title: '🔗 Platform Alert: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+
+  # ===========================================================================
+  # PagerDuty (Critical)
+  # ===========================================================================
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        severity: critical
+        description: '{{ template "pagerduty.description" . }}'
+        details:
+          firing: '{{ template "pagerduty.firing" . }}'
+          num_firing: '{{ .Alerts.Firing | len }}'
+          num_resolved: '{{ .Alerts.Resolved | len }}'
+
+  # ===========================================================================
+  # OpsGenie (Infrastructure)
+  # ===========================================================================
+  - name: 'opsgenie-infra'
+    opsgenie_configs:
+      - api_key: '${OPSGENIE_API_KEY}'
+        message: '{{ template "opsgenie.message" . }}'
+        priority: '{{ if eq .CommonLabels.severity "critical" }}P1{{ else }}P3{{ end }}'
+        tags: 'ssi-shadow,infrastructure,{{ .CommonLabels.component }}'
+
+  # ===========================================================================
+  # Telegram (Critical)
+  # ===========================================================================
+  - name: 'telegram-critical'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          🚨 <b>CRITICAL ALERT</b>
+          
+          <b>Alert:</b> {{ .CommonLabels.alertname }}
+          <b>Component:</b> {{ .CommonLabels.component }}
+          <b>Status:</b> {{ .Status }}
+          
+          {{ range .Alerts }}
+          <b>Summary:</b> {{ .Annotations.summary }}
+          <b>Description:</b> {{ .Annotations.description }}
+          {{ end }}
+          
+          <a href="https://grafana.ssi-shadow.io">📊 Dashboard</a>
+
+  # ===========================================================================
+  # Email (for escalation)
+  # ===========================================================================
+  - name: 'email-escalation'
+    email_configs:
+      - to: 'oncall@ssi-shadow.io'
+        send_resolved: true
+        html: '{{ template "email.html" . }}'
+        headers:
+          Subject: '[SSI Shadow] {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'

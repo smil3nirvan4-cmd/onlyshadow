@@ -1,0 +1,118 @@
+name: CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+env:
+  GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+  GCP_REGION: us-central1
+
+jobs:
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Configure Docker
+        run: gcloud auth configure-docker
+      
+      - name: Build and push API image
+        run: |
+          docker build -t gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.sha }} .
+          docker push gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.sha }}
+      
+      - name: Deploy to Cloud Run (Staging)
+        run: |
+          gcloud run deploy ssi-shadow-api-staging \
+            --image gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.sha }} \
+            --region $GCP_REGION \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars="ENVIRONMENT=staging"
+      
+      - name: Deploy Workers to Cloudflare (Staging)
+        working-directory: workers/gateway
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          npm ci
+          npx wrangler publish --env staging
+      
+      - name: Run dbt (Staging)
+        run: |
+          pip install dbt-bigquery
+          cd dbt && dbt run --target staging
+
+  deploy-production:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    needs: []
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Configure Docker
+        run: gcloud auth configure-docker
+      
+      - name: Build and push API image
+        run: |
+          docker build -t gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.ref_name }} .
+          docker push gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.ref_name }}
+      
+      - name: Deploy to Cloud Run (Production)
+        run: |
+          gcloud run deploy ssi-shadow-api \
+            --image gcr.io/$GCP_PROJECT/ssi-shadow-api:${{ github.ref_name }} \
+            --region $GCP_REGION \
+            --platform managed \
+            --min-instances 2 \
+            --max-instances 100 \
+            --set-env-vars="ENVIRONMENT=production"
+      
+      - name: Deploy Workers to Cloudflare (Production)
+        working-directory: workers/gateway
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          npm ci
+          npx wrangler publish --env production
+      
+      - name: Run dbt (Production)
+        run: |
+          pip install dbt-bigquery
+          cd dbt && dbt run --target production
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+      
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: "SSI Shadow ${{ github.ref_name }} deployed to production!"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

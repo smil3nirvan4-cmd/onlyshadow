@@ -1,0 +1,30 @@
+{
+  "info": {
+    "name": "SSI Shadow API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{"key": "token", "value": "{{access_token}}"}]
+  },
+  "variable": [
+    {"key": "base_url", "value": "https://api.ssi-shadow.io/v1"},
+    {"key": "access_token", "value": ""}
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {"name": "Basic Health Check", "request": {"method": "GET", "url": "{{base_url}}/health"}},
+        {"name": "Detailed Health Check", "request": {"method": "GET", "url": "{{base_url}}/health/detailed"}}
+      ]
+    },
+    {
+      "name": "gROAS",
+      "item": [
+        {"name": "Start Optimization", "request": {"method": "POST", "url": "{{base_url}}/api/groas/start"}},
+        {"name": "Get Status", "request": {"method": "GET", "url": "{{base_url}}/api/groas/status"}}
+      ]
+    }
+  ]
+}

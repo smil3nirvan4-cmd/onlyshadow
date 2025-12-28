@@ -1,0 +1,330 @@
+# =============================================================================
+# S.S.I. SHADOW - Deploy to Staging
+# =============================================================================
+# Triggers: push to develop branch
+# Steps: Deploy Worker, Deploy Dashboard, Run smoke tests, Notify
+# =============================================================================
+
+name: Deploy Staging
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip smoke tests'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  ENVIRONMENT: staging
+
+jobs:
+  # ===========================================================================
+  # DEPLOY WORKER TO STAGING
+  # ===========================================================================
+  deploy-worker:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    outputs:
+      worker_url: ${{ steps.deploy.outputs.url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+      
+      - name: Install dependencies
+        run: |
+          cd workers/gateway
+          npm ci
+      
+      - name: Build Worker
+        run: |
+          cd workers/gateway
+          npm run build
+      
+      - name: Deploy to Cloudflare Workers (Staging)
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd workers/gateway
+          
+          # Deploy with staging environment
+          DEPLOY_OUTPUT=$(wrangler deploy --env staging 2>&1)
+          echo "$DEPLOY_OUTPUT"
+          
+          # Extract worker URL
+          WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -1)
+          echo "url=$WORKER_URL" >> $GITHUB_OUTPUT
+          echo "Deployed to: $WORKER_URL"
+      
+      - name: Set environment secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          cd workers/gateway
+          
+          # Set secrets for staging environment
+          echo "${{ secrets.META_PIXEL_ID_STAGING }}" | wrangler secret put META_PIXEL_ID --env staging
+          echo "${{ secrets.META_ACCESS_TOKEN_STAGING }}" | wrangler secret put META_ACCESS_TOKEN --env staging
+          echo "${{ secrets.META_TEST_EVENT_CODE }}" | wrangler secret put META_TEST_EVENT_CODE --env staging
+          echo "${{ secrets.TIKTOK_PIXEL_ID_STAGING }}" | wrangler secret put TIKTOK_PIXEL_ID --env staging
+          echo "${{ secrets.TIKTOK_ACCESS_TOKEN_STAGING }}" | wrangler secret put TIKTOK_ACCESS_TOKEN --env staging
+          echo "${{ secrets.GA4_MEASUREMENT_ID_STAGING }}" | wrangler secret put GA4_MEASUREMENT_ID --env staging
+          echo "${{ secrets.GA4_API_SECRET_STAGING }}" | wrangler secret put GA4_API_SECRET --env staging
+          echo "${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}" | wrangler secret put GCP_SERVICE_ACCOUNT --env staging
+
+  # ===========================================================================
+  # DEPLOY DASHBOARD TO STAGING
+  # ===========================================================================
+  deploy-dashboard:
+    name: Deploy Dashboard
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    outputs:
+      dashboard_url: ${{ steps.deploy.outputs.url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          cd dashboard
+          npm ci
+      
+      - name: Build Dashboard
+        env:
+          VITE_API_URL: ${{ secrets.STAGING_WORKER_URL }}
+          VITE_ENVIRONMENT: staging
+        run: |
+          cd dashboard
+          npm run build
+      
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd dashboard
+          
+          npx wrangler pages deploy dist \
+            --project-name=ssi-shadow-dashboard \
+            --branch=staging \
+            --commit-hash=${{ github.sha }}
+          
+          echo "url=https://staging.ssi-shadow-dashboard.pages.dev" >> $GITHUB_OUTPUT
+
+  # ===========================================================================
+  # SMOKE TESTS
+  # ===========================================================================
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-worker, deploy-dashboard]
+    if: inputs.skip_tests != 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install test dependencies
+        run: |
+          cd tests
+          npm ci
+          npx playwright install --with-deps chromium
+      
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+      
+      - name: Test Worker health endpoint
+        run: |
+          WORKER_URL="${{ needs.deploy-worker.outputs.worker_url }}"
+          
+          # Health check
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$WORKER_URL/health" || echo "000")
+          if [[ "$RESPONSE" != "200" ]]; then
+            echo "Health check failed with status: $RESPONSE"
+            exit 1
+          fi
+          echo "Health check passed!"
+      
+      - name: Test Worker event collection
+        run: |
+          WORKER_URL="${{ needs.deploy-worker.outputs.worker_url }}"
+          
+          # Send test event
+          RESPONSE=$(curl -s -X POST "$WORKER_URL/api/collect" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" \
+            -d '{
+              "event_name": "PageView",
+              "event_id": "smoke_test_'$(date +%s)'",
+              "url": "https://example.com/smoke-test",
+              "timestamp": '$(date +%s000)'
+            }')
+          
+          echo "Response: $RESPONSE"
+          
+          # Check response contains event_id
+          if ! echo "$RESPONSE" | grep -q "event_id"; then
+            echo "Event collection failed!"
+            exit 1
+          fi
+          echo "Event collection passed!"
+      
+      - name: Run E2E smoke tests
+        env:
+          E2E_BASE_URL: ${{ needs.deploy-dashboard.outputs.dashboard_url }}
+        run: |
+          cd tests
+          npx playwright test tests/e2e/dashboard.spec.ts \
+            --project=chromium \
+            --grep="@smoke" \
+            --reporter=list \
+            || true
+      
+      - name: Upload smoke test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-results
+          path: tests/test-results/
+          retention-days: 3
+
+  # ===========================================================================
+  # NOTIFY
+  # ===========================================================================
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-worker, deploy-dashboard, smoke-tests]
+    if: always()
+    
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          if [[ "${{ needs.deploy-worker.result }}" == "success" && \
+                "${{ needs.deploy-dashboard.result }}" == "success" && \
+                "${{ needs.smoke-tests.result }}" != "failure" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+            echo "message=Staging deployment successful!" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+            echo "message=Staging deployment failed!" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.emoji }} SSI Shadow Staging Deployment"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ steps.status.outputs.message }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n`${{ github.sha }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Author:*\n${{ github.actor }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*URLs:*\n• Worker: ${{ needs.deploy-worker.outputs.worker_url }}\n• Dashboard: ${{ needs.deploy-dashboard.outputs.dashboard_url }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Dashboard"
+                      },
+                      "url": "${{ needs.deploy-dashboard.outputs.dashboard_url }}"
+                    },
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Send Telegram notification
+        if: always()
+        run: |
+          STATUS="${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.message }}"
+          MESSAGE="<b>SSI Shadow Staging Deploy</b>%0A%0A$STATUS%0A%0A<b>Branch:</b> ${{ github.ref_name }}%0A<b>Commit:</b> ${{ github.sha }}%0A<b>Author:</b> ${{ github.actor }}%0A%0A<b>Worker:</b> ${{ needs.deploy-worker.outputs.worker_url }}%0A<b>Dashboard:</b> ${{ needs.deploy-dashboard.outputs.dashboard_url }}"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=true"

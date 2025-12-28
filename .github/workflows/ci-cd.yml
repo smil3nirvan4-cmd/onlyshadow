@@ -1,0 +1,259 @@
+name: SSI Shadow CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+jobs:
+  # ==========================================================================
+  # LINT & TEST
+  # ==========================================================================
+  lint-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: workers/gateway/package-lock.json
+      
+      - name: Install Python dependencies
+        run: |
+          pip install -r shadow/requirements.txt
+          pip install pytest pytest-cov black flake8 mypy
+      
+      - name: Install Node dependencies
+        run: |
+          cd workers/gateway
+          npm ci
+      
+      - name: Lint Python
+        run: |
+          black --check shadow/ automation/ integrations/ functions/
+          flake8 shadow/ automation/ integrations/ functions/ --max-line-length=120
+      
+      - name: Lint TypeScript
+        run: |
+          cd workers/gateway
+          npm run lint || true
+      
+      - name: Type check Python
+        run: |
+          mypy shadow/ --ignore-missing-imports || true
+      
+      - name: Run Python tests
+        run: |
+          pytest tests/ -v --cov=shadow --cov=automation --cov-report=xml
+      
+      - name: Run TypeScript tests
+        run: |
+          cd workers/gateway
+          npm test || true
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  # ==========================================================================
+  # BUILD
+  # ==========================================================================
+  build:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Build Worker
+        run: |
+          cd workers/gateway
+          npm ci
+          npm run build
+      
+      - name: Build Docker image
+        run: |
+          docker build -t ssi-shadow:${{ github.sha }} .
+      
+      - name: Save Docker image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker save ssi-shadow:${{ github.sha }} > /tmp/ssi-shadow.tar
+      
+      - name: Upload Docker artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/ssi-shadow.tar
+          retention-days: 1
+
+  # ==========================================================================
+  # DEPLOY STAGING
+  # ==========================================================================
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      - name: Deploy Worker to Staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          cd workers/gateway
+          npm ci
+          wrangler deploy --env staging
+      
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'SSI Shadow deployed to staging'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # ==========================================================================
+  # DEPLOY PRODUCTION
+  # ==========================================================================
+  deploy-production:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup Google Cloud
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      # Deploy Worker
+      - name: Deploy Worker to Production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          cd workers/gateway
+          npm ci
+          wrangler deploy --env production
+      
+      # Deploy Cloud Functions
+      - name: Deploy Cloud Functions
+        run: |
+          cd functions
+          
+          for func in update_identity_graph trigger_model_training sync_platform_costs check_kill_switch cleanup_old_data generate_daily_report update_predictions; do
+            gcloud functions deploy $func \
+              --runtime python311 \
+              --trigger-http \
+              --allow-unauthenticated \
+              --region $GCP_REGION \
+              --set-env-vars GCP_PROJECT_ID=$GCP_PROJECT_ID
+          done
+      
+      # Update BigQuery
+      - name: Update BigQuery schemas
+        run: |
+          cd bigquery
+          for file in *.sql; do
+            bq query --use_legacy_sql=false < "$file" || true
+          done
+      
+      # Run dbt
+      - name: Run dbt
+        run: |
+          pip install dbt-bigquery
+          cd dbt
+          dbt run --target prod
+          dbt test --target prod
+      
+      - name: Notify Telegram
+        if: always()
+        run: |
+          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=🚀 SSI Shadow deployed to production (${{ job.status }})" \
+            -d "parse_mode=HTML"
+      
+      - name: Create Release
+        if: success()
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: |
+            Automated release from CI/CD pipeline.
+            Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false
+
+  # ==========================================================================
+  # ROLLBACK (Manual trigger)
+  # ==========================================================================
+  rollback:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: production
+    
+    steps:
+      - name: Rollback Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          # Wrangler rollback to previous version
+          cd workers/gateway
+          wrangler rollback --env production
+      
+      - name: Notify
+        run: |
+          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=⚠️ SSI Shadow rolled back to previous version"

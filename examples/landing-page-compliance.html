@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Produto Exemplo - Landing Page Compliance-First</title>
+    
+    <style>
+        /* 
+         * LANDING PAGE COMPLIANCE-FIRST
+         * 
+         * Estratégia:
+         * - Above the fold: 100% informacional e limpo
+         * - Elementos de conversão: carregam após interação real
+         * - Mesma página para todos (não é cloaking)
+         * - Progressive enhancement legítimo
+         */
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        
+        /* ABOVE THE FOLD - Sempre visível, 100% compliance */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .hero h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .hero p {
+            font-size: 1.25rem;
+            opacity: 0.9;
+            max-width: 600px;
+        }
+        
+        /* Preço ORIGINAL - sempre visível */
+        .price-section {
+            margin-top: 2rem;
+        }
+        
+        .price-original {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        
+        /* CTA ORIGINAL - texto neutro */
+        .cta-button {
+            display: inline-block;
+            margin-top: 1.5rem;
+            padding: 1rem 2rem;
+            background: white;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 8px;
+            transition: transform 0.2s;
+        }
+        
+        .cta-button:hover {
+            transform: scale(1.05);
+        }
+        
+        /* CONTENT SECTION - Informacional */
+        .content-section {
+            padding: 4rem 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .content-section h2 {
+            font-size: 1.75rem;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        .content-section p {
+            margin-bottom: 1rem;
+            color: #666;
+        }
+        
+        .features-list {
+            list-style: none;
+            margin: 2rem 0;
+        }
+        
+        .features-list li {
+            padding: 0.75rem 0;
+            padding-left: 2rem;
+            position: relative;
+        }
+        
+        .features-list li::before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #22c55e;
+            font-weight: bold;
+        }
+        
+        /* ============================================================
+         * ELEMENTOS QUE CARREGAM APÓS HYDRATION
+         * Estes elementos começam ocultos e aparecem após interação real
+         * ============================================================ */
+        
+        /* Banner de desconto - oculto por padrão */
+        .ssi-discount-banner {
+            display: none;  /* Oculto até hydration */
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .ssi-discount-banner.ssi-hydrated {
+            display: block;
+        }
+        
+        /* Countdown - oculto por padrão */
+        .ssi-countdown {
+            display: none;  /* Oculto até hydration */
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #dc2626;
+            margin: 0.5rem 0;
+        }
+        
+        .ssi-countdown.ssi-hydrated {
+            display: block;
+        }
+        
+        /* Social proof - oculto por padrão */
+        .ssi-social-proof {
+            display: none;  /* Oculto até hydration */
+            background: #f3f4f6;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        .ssi-social-proof.ssi-hydrated {
+            display: block;
+        }
+        
+        /* Urgência - oculto por padrão */
+        .ssi-urgency {
+            display: none;  /* Oculto até hydration */
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-weight: bold;
+            text-align: center;
+            margin: 1rem 0;
+        }
+        
+        .ssi-urgency.ssi-hydrated {
+            display: block;
+        }
+        
+        /* CTA Enhanced - estilo diferente após hydration */
+        .cta-button.ssi-cta-enhanced {
+            animation: pulse 2s infinite;
+            background: #22c55e;
+            color: white;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+            50% { transform: scale(1.02); box-shadow: 0 0 20px 5px rgba(34, 197, 94, 0.2); }
+        }
+        
+        /* Preço com desconto - revelado após hydration */
+        .ssi-original-price {
+            text-decoration: line-through;
+            opacity: 0.6;
+            font-size: 1rem;
+        }
+        
+        .ssi-discount-price {
+            color: #22c55e;
+            font-size: 2rem;
+        }
+        
+        /* FAQ Section */
+        .faq-section {
+            padding: 4rem 2rem;
+            background: #f9fafb;
+        }
+        
+        .faq-section h2 {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .faq-item {
+            max-width: 700px;
+            margin: 0 auto 1rem;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .faq-question {
+            padding: 1rem;
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .faq-answer {
+            padding: 0 1rem 1rem;
+            color: #666;
+        }
+        
+        /* Testimonials */
+        .testimonials {
+            padding: 4rem 2rem;
+        }
+        
+        .testimonials h2 {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .testimonial-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .testimonial-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .testimonial-card p {
+            font-style: italic;
+            margin-bottom: 1rem;
+        }
+        
+        .testimonial-author {
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        /* Footer */
+        footer {
+            background: #1f2937;
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        footer a {
+            color: #9ca3af;
+            margin: 0 0.5rem;
+        }
+        
+        /* Disclaimer - sempre visível */
+        .disclaimer {
+            background: #f3f4f6;
+            padding: 1rem 2rem;
+            font-size: 0.875rem;
+            color: #6b7280;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ============================================================
+         ABOVE THE FOLD - 100% Compliance
+         Conteúdo informacional, sem urgência artificial
+         ============================================================ -->
+    
+    <section class="hero">
+        <h1>Produto Exemplo</h1>
+        <p>
+            Descrição clara e honesta do produto. 
+            Explica os benefícios reais sem exageros.
+            Conteúdo 100% aprovável por revisores.
+        </p>
+        
+        <div class="price-section">
+            <!-- Preço original - sempre visível -->
+            <div class="price-original">
+                R$ 197,00
+            </div>
+            
+            <!-- Preço com desconto - revelado após hydration -->
+            <div data-ssi-price 
+                 data-ssi-original="R$ 197,00" 
+                 data-ssi-discount="R$ 97,00">
+            </div>
+        </div>
+        
+        <!-- CTA original - texto neutro -->
+        <a href="#comprar" 
+           class="cta-button" 
+           data-ssi-cta 
+           data-ssi-urgency-text="🔥 QUERO APROVEITAR AGORA!">
+            Saiba Mais
+        </a>
+        
+        <!-- Countdown - oculto até hydration -->
+        <div class="ssi-countdown" data-ssi-countdown="900">
+            <!-- Timer aparece após interação -->
+        </div>
+    </section>
+
+    <!-- ============================================================
+         ELEMENTOS DE URGÊNCIA - Ocultos até hydration
+         Só aparecem após prova de interação humana
+         ============================================================ -->
+    
+    <!-- Banner de desconto - oculto por padrão -->
+    <div class="ssi-discount-banner" data-ssi-reveal>
+        🎉 <strong>OFERTA ESPECIAL:</strong> 50% de desconto por tempo limitado!
+    </div>
+
+    <!-- ============================================================
+         CONTENT SECTION - Informacional
+         ============================================================ -->
+    
+    <section class="content-section">
+        <h2>Como Funciona</h2>
+        <p>
+            Explicação detalhada e honesta sobre o produto.
+            Informações verificáveis e precisas.
+            Sem promessas exageradas ou não comprovadas.
+        </p>
+        
+        <ul class="features-list">
+            <li>Benefício 1 - Descrição real e comprovável</li>
+            <li>Benefício 2 - Baseado em fatos</li>
+            <li>Benefício 3 - Expectativas realistas</li>
+            <li>Benefício 4 - Transparência total</li>
+        </ul>
+        
+        <!-- Social Proof - oculto até hydration -->
+        <div class="ssi-social-proof" data-ssi-reveal>
+            <strong>📊 +10.000 clientes satisfeitos</strong>
+            <p>Média de avaliação: 4.8/5 estrelas</p>
+        </div>
+        
+        <!-- Urgência - oculta até hydration -->
+        <div class="ssi-urgency" data-ssi-reveal>
+            ⚠️ Últimas 7 unidades em estoque!
+        </div>
+    </section>
+
+    <!-- ============================================================
+         FAQ - Interação trackeada
+         ============================================================ -->
+    
+    <section class="faq-section">
+        <h2>Perguntas Frequentes</h2>
+        
+        <div class="faq-item" data-faq>
+            <div class="faq-question">
+                Qual a garantia? <span>▼</span>
+            </div>
+            <div class="faq-answer">
+                Oferecemos garantia de 30 dias. Se não gostar, devolvemos seu dinheiro.
+            </div>
+        </div>
+        
+        <div class="faq-item" data-faq>
+            <div class="faq-question">
+                Como funciona a entrega? <span>▼</span>
+            </div>
+            <div class="faq-answer">
+                Enviamos para todo Brasil. Prazo médio de 5-10 dias úteis.
+            </div>
+        </div>
+        
+        <div class="faq-item" data-faq>
+            <div class="faq-question">
+                Posso parcelar? <span>▼</span>
+            </div>
+            <div class="faq-answer">
+                Sim! Parcelamos em até 12x no cartão.
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         TESTIMONIALS - Interação trackeada
+         ============================================================ -->
+    
+    <section class="testimonials">
+        <h2>O Que Nossos Clientes Dizem</h2>
+        
+        <div class="testimonial-grid">
+            <div class="testimonial-card" data-testimonial>
+                <p>"Produto excelente, superou minhas expectativas."</p>
+                <span class="testimonial-author">Maria S. - São Paulo</span>
+            </div>
+            
+            <div class="testimonial-card" data-testimonial>
+                <p>"Atendimento impecável e entrega rápida."</p>
+                <span class="testimonial-author">João P. - Rio de Janeiro</span>
+            </div>
+            
+            <div class="testimonial-card" data-testimonial>
+                <p>"Recomendo para todos. Vale cada centavo."</p>
+                <span class="testimonial-author">Ana L. - Belo Horizonte</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         DISCLAIMER - Sempre visível
+         ============================================================ -->
+    
+    <div class="disclaimer">
+        <p>
+            Resultados podem variar. Consulte os termos de uso antes da compra.
+            Este produto não substitui orientação profissional quando aplicável.
+        </p>
+    </div>
+
+    <!-- ============================================================
+         FOOTER
+         ============================================================ -->
+    
+    <footer>
+        <p>© 2025 Empresa Exemplo. Todos os direitos reservados.</p>
+        <p>
+            <a href="/termos">Termos de Uso</a> |
+            <a href="/privacidade">Política de Privacidade</a> |
+            <a href="/contato">Contato</a>
+        </p>
+    </footer>
+
+    <!-- ============================================================
+         S.S.I. GHOST SCRIPT v3 - Lazy Hydration
+         ============================================================ -->
+    
+    <script src="https://ssi.seudominio.com.br/ghost-v3.js" 
+            data-auto 
+            data-endpoint="https://ssi.seudominio.com.br/ingest">
+    </script>
+    
+    <!-- Consentimento LGPD (exemplo) -->
+    <script>
+        // Após usuário aceitar cookies, habilitar fingerprinting
+        window.addEventListener('cookiesAccepted', function() {
+            if (window.ssi) {
+                ssi.enableFingerprinting();
+            }
+        });
+        
+        // FAQ interação
+        document.querySelectorAll('.faq-question').forEach(function(q) {
+            q.addEventListener('click', function() {
+                this.parentElement.classList.toggle('active');
+            });
+        });
+    </script>
+
+</body>
+</html>

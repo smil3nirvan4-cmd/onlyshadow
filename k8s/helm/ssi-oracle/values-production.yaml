@@ -1,0 +1,338 @@
+# =============================================================================
+# S.S.I. SHADOW - Helm Values (Production)
+# =============================================================================
+# Override values for production environment
+# Usage: helm install ssi-shadow ./k8s/helm/ssi-shadow -f values-production.yaml
+# =============================================================================
+
+global:
+  environment: production
+  imageRegistry: gcr.io/YOUR_PROJECT_ID
+
+# API - production resources
+api:
+  replicaCount: 3
+  
+  image:
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 50
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Percent
+            value: 10
+            periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+          - type: Pods
+            value: 10
+            periodSeconds: 15
+        selectPolicy: Max
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - ssi-shadow-api
+          topologyKey: topology.kubernetes.io/zone
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: cloud.google.com/gke-spot
+                operator: DoesNotExist
+
+# Worker - production resources
+worker:
+  replicaCount: 3
+  
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+  
+  env:
+    WORKER_CONCURRENCY: "8"
+    WORKER_QUEUE: "default,priority,ml,bigquery"
+
+# Scheduler
+scheduler:
+  enabled: true
+  replicaCount: 1
+  
+  jobs:
+    - name: sync-platform-costs
+      schedule: "0 */4 * * *"
+      command: ["python", "-m", "shadow.jobs.sync_costs"]
+    
+    - name: update-ml-predictions
+      schedule: "0 3 * * *"
+      command: ["python", "-m", "ml.jobs.update_predictions"]
+    
+    - name: cleanup-old-data
+      schedule: "0 2 * * 0"
+      command: ["python", "-m", "shadow.jobs.cleanup"]
+    
+    - name: generate-reports
+      schedule: "0 7 * * *"
+      command: ["python", "-m", "shadow.jobs.reports"]
+    
+    - name: refresh-identity-graph
+      schedule: "0 5 * * *"
+      command: ["python", "-m", "shadow.jobs.identity_graph"]
+
+# Ingress - production URLs
+ingress:
+  enabled: true
+  className: nginx
+  
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/rate-limit: "500"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://dashboard.ssi-shadow.io"
+  
+  hosts:
+    - host: api.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api
+    
+    - host: dashboard.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+  
+  tls:
+    - secretName: ssi-shadow-production-tls
+      hosts:
+        - api.ssi-shadow.io
+        - dashboard.ssi-shadow.io
+
+# Dashboard
+dashboard:
+  enabled: true
+  replicaCount: 3
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# Configuration
+config:
+  logLevel: INFO
+  logFormat: json
+  
+  features:
+    enableTrustScore: true
+    enableMLPredictions: true
+    enableBidOptimization: true
+    enableCostSync: true
+  
+  rateLimiting:
+    enabled: true
+    requestsPerMinute: 2000
+    burstSize: 200
+  
+  # Production mode for all platforms
+  platforms:
+    meta:
+      enabled: true
+      testMode: false
+    tiktok:
+      enabled: true
+      testMode: false
+    google:
+      enabled: true
+      testMode: false
+
+# Secrets - production credentials
+secrets:
+  externalSecrets:
+    enabled: true
+    secretStoreRef:
+      name: gcp-secret-manager
+      kind: ClusterSecretStore
+  
+  names:
+    meta: ssi-shadow-meta-credentials
+    tiktok: ssi-shadow-tiktok-credentials
+    google: ssi-shadow-google-credentials
+    gcp: ssi-shadow-gcp-credentials
+
+# Service Account with Workload Identity
+serviceAccount:
+  create: true
+  name: ssi-shadow
+  annotations:
+    iam.gke.io/gcp-service-account: ssi-shadow@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+# Network Policy - strict in production
+networkPolicy:
+  enabled: true
+
+# Pod Security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Monitoring - full production setup
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus
+  
+  grafanaDashboards:
+    enabled: true
+  
+  prometheusRules:
+    enabled: true
+    rules:
+      - alert: SSIShadowHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="ssi-shadow",status=~"5.."}[5m])) /
+          sum(rate(http_requests_total{job="ssi-shadow"}[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate in SSI Shadow
+          description: Error rate is above 1% for more than 5 minutes
+      
+      - alert: SSIShadowHighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="ssi-shadow"}[5m])) by (le)) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High latency in SSI Shadow
+          description: P95 latency is above 300ms for more than 10 minutes
+      
+      - alert: SSIShadowQueueBacklog
+        expr: |
+          ssi_shadow_queue_length > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: SSI Shadow queue backlog
+          description: Queue length is above 1000 for more than 5 minutes
+
+# Redis - production config
+redis:
+  enabled: true
+  
+  architecture: replication
+  
+  auth:
+    enabled: true
+    existingSecret: ssi-shadow-redis
+  
+  master:
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: premium-rwo
+    
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+  
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: premium-rwo
+    
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+  
+  sentinel:
+    enabled: true
+    masterSet: mymaster
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# PostgreSQL - disabled (use BigQuery)
+postgresql:
+  enabled: false

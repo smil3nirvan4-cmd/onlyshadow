@@ -1,0 +1,89 @@
+# =============================================================================
+# S.S.I. SHADOW - Grafana Datasources
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  # ===========================================================================
+  # Prometheus
+  # ===========================================================================
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: "2.48.0"
+
+  # ===========================================================================
+  # Loki (Logs)
+  # ===========================================================================
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+      derivedFields:
+        - datasourceUid: jaeger
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"
+
+  # ===========================================================================
+  # Jaeger (Tracing)
+  # ===========================================================================
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      tracesToLogs:
+        datasourceUid: loki
+        tags: ['job', 'instance', 'pod', 'namespace']
+        mappedTags: [{ key: 'service.name', value: 'service' }]
+        mapTagNamesEnabled: true
+        spanStartTimeShift: '-1h'
+        spanEndTimeShift: '1h'
+        filterByTraceID: true
+        filterBySpanID: false
+
+  # ===========================================================================
+  # BigQuery (Optional - for business metrics)
+  # ===========================================================================
+  - name: BigQuery
+    type: grafana-bigquery-datasource
+    uid: bigquery
+    access: proxy
+    editable: false
+    jsonData:
+      authenticationType: jwt
+      tokenUri: https://oauth2.googleapis.com/token
+      defaultProject: ${GCP_PROJECT_ID}
+    secureJsonData:
+      privateKey: ${GCP_PRIVATE_KEY}
+
+  # ===========================================================================
+  # Alertmanager
+  # ===========================================================================
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
