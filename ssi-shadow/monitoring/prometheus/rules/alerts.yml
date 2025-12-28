@@ -1,0 +1,420 @@
+# =============================================================================
+# S.S.I. SHADOW - Prometheus Alert Rules
+# =============================================================================
+# Comprehensive alerting rules for all system components
+# =============================================================================
+
+groups:
+  # ===========================================================================
+  # API Health Alerts
+  # ===========================================================================
+  - name: ssi-shadow-api
+    rules:
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="ssi-shadow-api",status=~"5.."}[5m])) /
+            sum(rate(http_requests_total{job="ssi-shadow-api"}[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "High error rate in SSI Shadow API"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 1%)"
+          runbook_url: "https://docs.ssi-shadow.io/runbooks/api-errors"
+
+      - alert: APIHighLatencyP95
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{job="ssi-shadow-api"}[5m])) by (le)
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High P95 latency in SSI Shadow API"
+          description: "P95 latency is {{ $value | humanizeDuration }} (threshold: 300ms)"
+
+      - alert: APIHighLatencyP99
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_request_duration_seconds_bucket{job="ssi-shadow-api"}[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Critical P99 latency in SSI Shadow API"
+          description: "P99 latency is {{ $value | humanizeDuration }} (threshold: 500ms)"
+
+      - alert: APIDown
+        expr: up{job="ssi-shadow-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "SSI Shadow API is down"
+          description: "API instance {{ $labels.instance }} is not responding"
+
+      - alert: APIHighCPU
+        expr: |
+          rate(process_cpu_seconds_total{job="ssi-shadow-api"}[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High CPU usage in API"
+          description: "CPU usage is {{ $value | humanize }}%"
+
+      - alert: APIHighMemory
+        expr: |
+          process_resident_memory_bytes{job="ssi-shadow-api"} / 
+          (1024 * 1024 * 1024) > 3.5
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High memory usage in API"
+          description: "Memory usage is {{ $value | humanize }}GB (limit: 4GB)"
+
+  # ===========================================================================
+  # Event Processing Alerts
+  # ===========================================================================
+  - name: ssi-shadow-events
+    rules:
+      - alert: EventsDropped
+        expr: |
+          increase(ssi_events_dropped_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: events
+        annotations:
+          summary: "Events are being dropped"
+          description: "{{ $value }} events dropped in the last 5 minutes"
+
+      - alert: EventProcessingBacklog
+        expr: |
+          ssi_events_queue_length > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: events
+        annotations:
+          summary: "Event processing backlog"
+          description: "Queue length is {{ $value }} (threshold: 1000)"
+
+      - alert: EventProcessingSlow
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(ssi_event_processing_duration_seconds_bucket[5m])) by (le)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: events
+        annotations:
+          summary: "Slow event processing"
+          description: "P95 event processing time is {{ $value | humanizeDuration }}"
+
+      - alert: LowEventVolume
+        expr: |
+          sum(rate(ssi_events_received_total[1h])) < 10
+        for: 30m
+        labels:
+          severity: warning
+          component: events
+        annotations:
+          summary: "Unusually low event volume"
+          description: "Only {{ $value | humanize }}/s events received (expected: >10/s)"
+
+      - alert: HighBotTraffic
+        expr: |
+          sum(rate(ssi_events_blocked_total{reason="bot"}[5m])) /
+          sum(rate(ssi_events_received_total[5m])) > 0.3
+        for: 15m
+        labels:
+          severity: warning
+          component: trust-score
+        annotations:
+          summary: "High bot traffic detected"
+          description: "{{ $value | humanizePercentage }} of traffic is blocked as bots"
+
+  # ===========================================================================
+  # Platform Integration Alerts
+  # ===========================================================================
+  - name: ssi-shadow-platforms
+    rules:
+      - alert: MetaAPIErrors
+        expr: |
+          sum(rate(ssi_platform_requests_total{platform="meta",status="error"}[5m])) /
+          sum(rate(ssi_platform_requests_total{platform="meta"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          component: meta
+        annotations:
+          summary: "High error rate in Meta CAPI"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: TikTokAPIErrors
+        expr: |
+          sum(rate(ssi_platform_requests_total{platform="tiktok",status="error"}[5m])) /
+          sum(rate(ssi_platform_requests_total{platform="tiktok"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          component: tiktok
+        annotations:
+          summary: "High error rate in TikTok Events API"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: GoogleAPIErrors
+        expr: |
+          sum(rate(ssi_platform_requests_total{platform="google",status="error"}[5m])) /
+          sum(rate(ssi_platform_requests_total{platform="google"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          component: google
+        annotations:
+          summary: "High error rate in Google MP"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: PlatformLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ssi_platform_request_duration_seconds_bucket[5m])) by (le, platform)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          component: platforms
+        annotations:
+          summary: "High latency to {{ $labels.platform }}"
+          description: "P95 latency is {{ $value | humanizeDuration }}"
+
+      - alert: BigQueryIngestionFailed
+        expr: |
+          increase(ssi_bigquery_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: bigquery
+        annotations:
+          summary: "BigQuery ingestion errors"
+          description: "{{ $value }} errors in the last 5 minutes"
+
+  # ===========================================================================
+  # ML & Predictions Alerts
+  # ===========================================================================
+  - name: ssi-shadow-ml
+    rules:
+      - alert: MLPredictionErrors
+        expr: |
+          sum(rate(ssi_ml_prediction_errors_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: ml
+        annotations:
+          summary: "ML prediction errors"
+          description: "{{ $value | humanize }}/s prediction errors"
+
+      - alert: MLModelStale
+        expr: |
+          (time() - ssi_ml_model_last_update_timestamp) / 3600 > 48
+        for: 1h
+        labels:
+          severity: warning
+          component: ml
+        annotations:
+          summary: "ML model is stale"
+          description: "Model {{ $labels.model }} hasn't been updated in {{ $value | humanize }} hours"
+
+      - alert: LTVPredictionDrift
+        expr: |
+          abs(
+            avg(ssi_ml_ltv_predicted) - avg(ssi_ml_ltv_actual)
+          ) / avg(ssi_ml_ltv_actual) > 0.2
+        for: 1h
+        labels:
+          severity: warning
+          component: ml
+        annotations:
+          summary: "LTV prediction drift detected"
+          description: "Predicted vs actual LTV differs by {{ $value | humanizePercentage }}"
+
+  # ===========================================================================
+  # Worker & Background Jobs Alerts
+  # ===========================================================================
+  - name: ssi-shadow-worker
+    rules:
+      - alert: WorkerDown
+        expr: up{job="ssi-shadow-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "Worker is down"
+          description: "Worker instance {{ $labels.instance }} is not responding"
+
+      - alert: WorkerQueueBacklog
+        expr: |
+          ssi_worker_queue_length > 500
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker queue backlog"
+          description: "Queue {{ $labels.queue }} has {{ $value }} pending jobs"
+
+      - alert: CronJobFailed
+        expr: |
+          increase(ssi_cronjob_failures_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: "Cron job failed"
+          description: "Job {{ $labels.job }} failed {{ $value }} times in the last hour"
+
+  # ===========================================================================
+  # Infrastructure Alerts
+  # ===========================================================================
+  - name: ssi-shadow-infrastructure
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance is not responding"
+
+      - alert: RedisHighMemory
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: RedisSlowCommands
+        expr: |
+          rate(redis_slowlog_length[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis slow commands detected"
+          description: "{{ $value | humanize }} slow commands per second"
+
+      - alert: HighDiskUsage
+        expr: |
+          (node_filesystem_size_bytes - node_filesystem_avail_bytes) / 
+          node_filesystem_size_bytes > 0.85
+        for: 15m
+        labels:
+          severity: warning
+          component: infrastructure
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.mountpoint }}"
+
+      - alert: HighNetworkErrors
+        expr: |
+          rate(node_network_receive_errs_total[5m]) > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: infrastructure
+        annotations:
+          summary: "High network errors"
+          description: "{{ $value | humanize }} network errors per second"
+
+  # ===========================================================================
+  # Business Metrics Alerts
+  # ===========================================================================
+  - name: ssi-shadow-business
+    rules:
+      - alert: LowConversionRate
+        expr: |
+          sum(rate(ssi_events_received_total{event_name="Purchase"}[1h])) /
+          sum(rate(ssi_events_received_total{event_name="PageView"}[1h])) < 0.005
+        for: 1h
+        labels:
+          severity: warning
+          component: business
+        annotations:
+          summary: "Low conversion rate"
+          description: "Conversion rate is {{ $value | humanizePercentage }} (expected: >0.5%)"
+
+      - alert: RevenueDropped
+        expr: |
+          sum(rate(ssi_events_value_total[1h])) < 
+          sum(rate(ssi_events_value_total[1h] offset 1d)) * 0.5
+        for: 2h
+        labels:
+          severity: critical
+          component: business
+        annotations:
+          summary: "Significant revenue drop"
+          description: "Revenue dropped more than 50% compared to yesterday"
+
+      - alert: HighCostPerEvent
+        expr: |
+          ssi_platform_cost_total / ssi_events_sent_total > 0.10
+        for: 1h
+        labels:
+          severity: warning
+          component: business
+        annotations:
+          summary: "High cost per event"
+          description: "Cost per event is ${{ $value | humanize }} (threshold: $0.10)"
+
+  # ===========================================================================
+  # SLO Alerts (Error Budget)
+  # ===========================================================================
+  - name: ssi-shadow-slo
+    rules:
+      - alert: SLOErrorBudgetBurn
+        expr: |
+          sum(rate(http_requests_total{job="ssi-shadow-api",status=~"5.."}[1h])) /
+          sum(rate(http_requests_total{job="ssi-shadow-api"}[1h])) > 0.001 * 14.4
+        for: 5m
+        labels:
+          severity: critical
+          component: slo
+        annotations:
+          summary: "SLO error budget burning fast"
+          description: "Error budget burn rate indicates SLO breach within 1 hour"
+
+      - alert: SLOLatencyBudgetBurn
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{job="ssi-shadow-api"}[1h])) by (le)
+          ) > 0.5 * 14.4
+        for: 5m
+        labels:
+          severity: critical
+          component: slo
+        annotations:
+          summary: "SLO latency budget burning fast"
+          description: "Latency budget burn rate indicates SLO breach within 1 hour"

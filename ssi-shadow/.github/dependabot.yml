@@ -1,0 +1,245 @@
+# =============================================================================
+# S.S.I. SHADOW - Dependabot Configuration
+# =============================================================================
+# Automatic dependency updates for npm, pip, and GitHub Actions
+# =============================================================================
+
+version: 2
+
+registries:
+  npm-registry:
+    type: npm-registry
+    url: https://registry.npmjs.org
+    replaces-base: true
+
+updates:
+  # ---------------------------------------------------------------------------
+  # NPM - Worker
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/workers/gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+      - "worker"
+    commit-message:
+      prefix: "deps(worker)"
+    reviewers:
+      - "ssi-shadow-maintainers"
+    groups:
+      typescript:
+        patterns:
+          - "typescript"
+          - "@types/*"
+      testing:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+          - "playwright"
+      cloudflare:
+        patterns:
+          - "wrangler"
+          - "@cloudflare/*"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+
+  # ---------------------------------------------------------------------------
+  # NPM - Dashboard
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/dashboard"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+      - "dashboard"
+    commit-message:
+      prefix: "deps(dashboard)"
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-*"
+          - "@types/react*"
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+      tailwind:
+        patterns:
+          - "tailwindcss"
+          - "postcss"
+          - "autoprefixer"
+      charts:
+        patterns:
+          - "recharts"
+          - "chart.js"
+          - "@types/chart.js"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+
+  # ---------------------------------------------------------------------------
+  # NPM - Tests
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "npm"
+      - "tests"
+    commit-message:
+      prefix: "deps(tests)"
+    groups:
+      testing:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+          - "playwright"
+          - "@playwright/*"
+          - "k6"
+
+  # ---------------------------------------------------------------------------
+  # NPM - Ghost Script
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/workers/ghost"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "npm"
+      - "ghost"
+    commit-message:
+      prefix: "deps(ghost)"
+
+  # ---------------------------------------------------------------------------
+  # Python - Root
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps(python)"
+    reviewers:
+      - "ssi-shadow-maintainers"
+    groups:
+      ml:
+        patterns:
+          - "scikit-learn"
+          - "pandas"
+          - "numpy"
+          - "scipy"
+          - "xgboost"
+          - "lightgbm"
+      google:
+        patterns:
+          - "google-*"
+          - "google_*"
+      facebook:
+        patterns:
+          - "facebook-*"
+      testing:
+        patterns:
+          - "pytest*"
+          - "black"
+          - "flake8"
+          - "mypy"
+          - "isort"
+    ignore:
+      # Avoid breaking changes in major versions
+      - dependency-name: "pandas"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
+
+  # ---------------------------------------------------------------------------
+  # Python - Shadow
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/shadow"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+      - "shadow"
+    commit-message:
+      prefix: "deps(shadow)"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci"
+    commit-message:
+      prefix: "ci(deps)"
+    reviewers:
+      - "ssi-shadow-maintainers"
+    groups:
+      actions:
+        patterns:
+          - "actions/*"
+      google:
+        patterns:
+          - "google-github-actions/*"
+      security:
+        patterns:
+          - "github/codeql-action"
+          - "snyk/*"
+          - "aquasecurity/*"
+
+  # ---------------------------------------------------------------------------
+  # Docker
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "deps(docker)"

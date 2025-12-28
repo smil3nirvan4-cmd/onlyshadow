@@ -1,0 +1,101 @@
+/* ============================================================================
+   S.S.I. ORACLE Dashboard - Styles
+   ============================================================================ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom base styles */
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  .card-hover {
+    @apply transition-shadow duration-200 hover:shadow-md;
+  }
+  
+  .metric-value {
+    @apply text-2xl font-bold text-gray-900;
+  }
+  
+  .metric-label {
+    @apply text-sm font-medium text-gray-500;
+  }
+  
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  
+  .status-dot-healthy {
+    @apply bg-green-500;
+  }
+  
+  .status-dot-degraded {
+    @apply bg-yellow-500;
+  }
+  
+  .status-dot-down {
+    @apply bg-red-500;
+  }
+}
+
+/* Custom utility styles */
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600;
+  }
+  
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Animation keyframes */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s ease-in-out infinite;
+}
+
+/* Chart tooltip customization */
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+.recharts-default-tooltip {
+  @apply rounded-lg shadow-lg border border-gray-200 !important;
+}
+
+/* Table styles */
+table {
+  @apply w-full;
+}
+
+th {
+  @apply text-left text-xs font-medium text-gray-500 uppercase tracking-wider;
+}
+
+td {
+  @apply text-sm text-gray-900;
+}

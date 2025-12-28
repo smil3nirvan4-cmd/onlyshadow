@@ -1,0 +1,57 @@
+# =============================================================================
+# S.S.I. SHADOW — dbt Project
+# DATA QUALITY & TRANSFORMATIONS
+# =============================================================================
+#
+# dbt (data build tool) para:
+# 1. Transformações de dados
+# 2. Testes de qualidade
+# 3. Documentação automática
+# 4. Lineage tracking
+#
+# Setup:
+#   pip install dbt-bigquery
+#   cd ssi-shadow/dbt
+#   dbt init
+#   dbt run
+#   dbt test
+#
+# =============================================================================
+
+name: 'ssi_shadow'
+version: '1.0.0'
+config-version: 2
+
+# Profile padrão
+profile: 'ssi_shadow'
+
+# Diretórios
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Configurações de modelo padrão
+models:
+  ssi_shadow:
+    # Staging: tabelas intermediárias
+    staging:
+      +materialized: view
+      +schema: staging
+    
+    # Marts: tabelas finais para análise
+    marts:
+      +materialized: table
+      +schema: marts
+
+# Variáveis globais
+vars:
+  project_id: '{{ env_var("GCP_PROJECT_ID") }}'
+  dataset_id: 'ssi_shadow'

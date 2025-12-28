@@ -1,0 +1,46 @@
+[
+  {"name": "event_id", "type": "STRING", "mode": "REQUIRED", "description": "Unique event identifier"},
+  {"name": "event_name", "type": "STRING", "mode": "REQUIRED", "description": "Event type (PageView, Purchase, etc)"},
+  {"name": "event_time", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Event timestamp"},
+  {"name": "ssi_id", "type": "STRING", "mode": "REQUIRED", "description": "SSI Shadow visitor ID"},
+  
+  {"name": "url", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "referrer", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "fbclid", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "gclid", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "ttclid", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "utm_source", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "utm_medium", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "utm_campaign", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "fbp", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "fbc", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "ip_hash", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "ua", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "device_type", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "browser", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "os", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "country", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "region", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "city", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "canvas_hash", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "webgl_hash", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "email_hash", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "phone_hash", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "trust_score", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "intent_score", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "ltv_score", "type": "FLOAT64", "mode": "NULLABLE"},
+  
+  {"name": "custom_data", "type": "JSON", "mode": "NULLABLE"},
+  
+  {"name": "capi_sent", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "capi_response", "type": "STRING", "mode": "NULLABLE"},
+  
+  {"name": "processed_at", "type": "TIMESTAMP", "mode": "REQUIRED"}
+]

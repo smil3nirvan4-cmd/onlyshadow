@@ -1,0 +1,421 @@
+# =============================================================================
+# S.S.I. SHADOW - Security Scanning
+# =============================================================================
+# Triggers: push to main/develop, pull requests, scheduled (daily)
+# Scans: Dependency vulnerabilities, SAST, Secret scanning, Container scanning
+# =============================================================================
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # ===========================================================================
+  # DEPENDENCY SCANNING - NPM
+  # ===========================================================================
+  npm-audit:
+    name: NPM Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Audit Worker dependencies
+        run: |
+          cd workers/gateway
+          npm ci
+          npm audit --audit-level=high --json > npm-audit-worker.json || true
+        continue-on-error: true
+      
+      - name: Audit Dashboard dependencies
+        run: |
+          cd dashboard
+          npm ci
+          npm audit --audit-level=high --json > npm-audit-dashboard.json || true
+        continue-on-error: true
+      
+      - name: Audit Test dependencies
+        run: |
+          cd tests
+          npm ci
+          npm audit --audit-level=high --json > npm-audit-tests.json || true
+        continue-on-error: true
+      
+      - name: Check for critical vulnerabilities
+        run: |
+          # Check Worker
+          WORKER_CRITICAL=$(cat workers/gateway/npm-audit-worker.json 2>/dev/null | jq '.metadata.vulnerabilities.critical // 0')
+          WORKER_HIGH=$(cat workers/gateway/npm-audit-worker.json 2>/dev/null | jq '.metadata.vulnerabilities.high // 0')
+          
+          echo "Worker - Critical: $WORKER_CRITICAL, High: $WORKER_HIGH"
+          
+          if [[ "$WORKER_CRITICAL" -gt 0 ]]; then
+            echo "::error::Critical vulnerabilities found in Worker dependencies!"
+            exit 1
+          fi
+      
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-results
+          path: |
+            workers/gateway/npm-audit-*.json
+            dashboard/npm-audit-*.json
+            tests/npm-audit-*.json
+          retention-days: 30
+
+  # ===========================================================================
+  # DEPENDENCY SCANNING - PIP
+  # ===========================================================================
+  pip-audit:
+    name: Pip Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install pip-audit
+        run: pip install pip-audit
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run pip audit
+        run: |
+          pip-audit --format json --output pip-audit.json || true
+          pip-audit --format markdown --output pip-audit.md || true
+        continue-on-error: true
+      
+      - name: Check for critical vulnerabilities
+        run: |
+          VULNS=$(cat pip-audit.json 2>/dev/null | jq 'length')
+          echo "Found $VULNS vulnerabilities"
+          
+          # Check for high/critical
+          CRITICAL=$(cat pip-audit.json 2>/dev/null | jq '[.[] | select(.fix_versions != null)] | length')
+          if [[ "$CRITICAL" -gt 5 ]]; then
+            echo "::warning::$CRITICAL fixable vulnerabilities found!"
+          fi
+      
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-results
+          path: pip-audit.*
+          retention-days: 30
+
+  # ===========================================================================
+  # SNYK SECURITY SCAN
+  # ===========================================================================
+  snyk:
+    name: Snyk Scan
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup Snyk
+        uses: snyk/actions/setup@master
+      
+      - name: Install dependencies
+        run: |
+          cd workers/gateway
+          npm ci
+      
+      - name: Snyk test (Worker)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          cd workers/gateway
+          snyk test --severity-threshold=high --json > snyk-worker.json || true
+        continue-on-error: true
+      
+      - name: Snyk test (Python)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test --file=requirements.txt --severity-threshold=high --json > snyk-python.json || true
+        continue-on-error: true
+      
+      - name: Snyk monitor (push to Snyk dashboard)
+        if: github.ref == 'refs/heads/main'
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          cd workers/gateway
+          snyk monitor --project-name=ssi-shadow-worker || true
+      
+      - name: Upload Snyk results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-results
+          path: snyk-*.json
+          retention-days: 30
+
+  # ===========================================================================
+  # CODEQL ANALYSIS (SAST)
+  # ===========================================================================
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript, python]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # ===========================================================================
+  # SEMGREP ANALYSIS
+  # ===========================================================================
+  semgrep:
+    name: Semgrep Analysis
+    runs-on: ubuntu-latest
+    
+    container:
+      image: returntocorp/semgrep
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/owasp-top-ten \
+            --json \
+            --output semgrep-results.json \
+            . || true
+      
+      - name: Check for critical findings
+        run: |
+          CRITICAL=$(cat semgrep-results.json | jq '[.results[] | select(.extra.severity == "ERROR")] | length')
+          HIGH=$(cat semgrep-results.json | jq '[.results[] | select(.extra.severity == "WARNING")] | length')
+          
+          echo "Critical: $CRITICAL, High: $HIGH"
+          
+          if [[ "$CRITICAL" -gt 0 ]]; then
+            echo "::error::Critical security issues found!"
+            cat semgrep-results.json | jq '.results[] | select(.extra.severity == "ERROR") | {path, line: .start.line, message: .extra.message}'
+          fi
+      
+      - name: Upload Semgrep results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          retention-days: 30
+
+  # ===========================================================================
+  # SECRET SCANNING
+  # ===========================================================================
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Install Gitleaks
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
+          chmod +x gitleaks
+      
+      - name: Run Gitleaks
+        run: |
+          ./gitleaks detect \
+            --source . \
+            --report-format json \
+            --report-path gitleaks-report.json \
+            --verbose \
+            || true
+      
+      - name: Check for secrets
+        run: |
+          if [[ -f gitleaks-report.json ]]; then
+            LEAKS=$(cat gitleaks-report.json | jq 'length')
+            if [[ "$LEAKS" -gt 0 ]]; then
+              echo "::error::$LEAKS potential secrets found!"
+              cat gitleaks-report.json | jq '.[].Description'
+              exit 1
+            fi
+          fi
+          echo "No secrets detected"
+      
+      - name: Upload Gitleaks results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-results
+          path: gitleaks-report.json
+          retention-days: 30
+
+  # ===========================================================================
+  # DOCKER IMAGE SCANNING
+  # ===========================================================================
+  container-scan:
+    name: Container Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build Docker image
+        run: |
+          docker build -t ssi-shadow:scan .
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ssi-shadow:scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Run Trivy (table output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ssi-shadow:scan'
+          format: 'table'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+  # ===========================================================================
+  # LICENSE COMPLIANCE
+  # ===========================================================================
+  license-check:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install license-checker
+        run: npm install -g license-checker
+      
+      - name: Check Worker licenses
+        run: |
+          cd workers/gateway
+          npm ci
+          license-checker --json --out licenses-worker.json
+          
+          # Check for problematic licenses
+          COPYLEFT=$(cat licenses-worker.json | jq -r 'to_entries[] | select(.value.licenses | test("GPL|AGPL|LGPL"; "i")) | .key')
+          if [[ -n "$COPYLEFT" ]]; then
+            echo "::warning::Copyleft licenses found: $COPYLEFT"
+          fi
+      
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: workers/gateway/licenses-*.json
+          retention-days: 30
+
+  # ===========================================================================
+  # SECURITY SUMMARY
+  # ===========================================================================
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [npm-audit, pip-audit, codeql, semgrep, secret-scan, container-scan]
+    if: always()
+    
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| NPM Audit | ${{ needs.npm-audit.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pip Audit | ${{ needs.pip-audit.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CodeQL | ${{ needs.codeql.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Semgrep | ${{ needs.semgrep.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scan | ${{ needs.secret-scan.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Scan | ${{ needs.container-scan.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Notify on critical findings
+        if: |
+          needs.npm-audit.result == 'failure' ||
+          needs.secret-scan.result == 'failure' ||
+          needs.codeql.result == 'failure'
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=🚨 <b>Security Alert</b>%0A%0ACritical security findings detected in SSI Shadow!%0A%0ACheck: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d "parse_mode=HTML"

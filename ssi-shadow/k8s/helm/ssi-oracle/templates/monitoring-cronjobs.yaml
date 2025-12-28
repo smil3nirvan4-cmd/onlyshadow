@@ -1,0 +1,162 @@
+{{- /* =================================================================== */ -}}
+{{- /* SERVICE MONITOR (Prometheus)                                        */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ssi-shadow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      path: /metrics
+      scheme: http
+{{- end }}
+---
+{{- /* =================================================================== */ -}}
+{{- /* PROMETHEUS RULES (Alerting)                                         */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.monitoring.prometheusRules.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ssi-shadow.fullname" . }}
+  labels:
+    {{- include "ssi-shadow.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: ssi-shadow
+      rules:
+        {{- range .Values.monitoring.prometheusRules.rules }}
+        - alert: {{ .alert }}
+          expr: {{ .expr | quote }}
+          for: {{ .for }}
+          labels:
+            {{- toYaml .labels | nindent 12 }}
+          annotations:
+            {{- toYaml .annotations | nindent 12 }}
+        {{- end }}
+        
+        # Built-in rules
+        - alert: SSIShadowPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}", pod=~"{{ include "ssi-shadow.fullname" . }}.*"}[1h]) > 3
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SSI Shadow pod is crash looping"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has restarted more than 3 times in the last hour"
+        
+        - alert: SSIShadowPodNotReady
+          expr: |
+            kube_pod_status_ready{namespace="{{ .Release.Namespace }}", pod=~"{{ include "ssi-shadow.fullname" . }}.*", condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSI Shadow pod is not ready"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has been not ready for 5 minutes"
+        
+        - alert: SSIShadowHighMemoryUsage
+          expr: |
+            container_memory_usage_bytes{namespace="{{ .Release.Namespace }}", container=~"api|worker"} /
+            container_spec_memory_limit_bytes{namespace="{{ .Release.Namespace }}", container=~"api|worker"} > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSI Shadow high memory usage"
+            description: "Container {{ "{{" }} $labels.container {{ "}}" }} is using more than 90% of memory limit"
+        
+        - alert: SSIShadowEventsDropped
+          expr: |
+            increase(ssi_shadow_events_dropped_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SSI Shadow is dropping events"
+            description: "Events are being dropped, check queue capacity and processing"
+{{- end }}
+---
+{{- /* =================================================================== */ -}}
+{{- /* CRONJOBS (Scheduled Tasks)                                          */ -}}
+{{- /* =================================================================== */ -}}
+{{- if .Values.scheduler.enabled }}
+{{- range .Values.scheduler.jobs }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "ssi-shadow.fullname" $ }}-{{ .name }}
+  labels:
+    {{- include "ssi-shadow.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  schedule: {{ .schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            {{- include "ssi-shadow.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: scheduler
+            job-name: {{ .name }}
+        spec:
+          {{- with $.Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "ssi-shadow.serviceAccountName" $ }}
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          restartPolicy: OnFailure
+          containers:
+            - name: {{ .name }}
+              securityContext:
+                {{- toYaml $.Values.securityContext | nindent 16 }}
+              image: "{{ $.Values.global.imageRegistry }}{{ $.Values.scheduler.image.repository }}:{{ $.Values.scheduler.image.tag | default $.Chart.AppVersion }}"
+              imagePullPolicy: {{ $.Values.scheduler.image.pullPolicy }}
+              command:
+                {{- toYaml .command | nindent 16 }}
+              env:
+                - name: APP_ENV
+                  value: {{ $.Values.global.environment | quote }}
+                - name: GCP_PROJECT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $.Values.secrets.names.gcp }}
+                      key: project-id
+              resources:
+                {{- toYaml $.Values.scheduler.resources | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+{{- end }}
+{{- end }}

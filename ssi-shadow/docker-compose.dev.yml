@@ -1,0 +1,278 @@
+# =============================================================================
+# S.S.I. SHADOW - Docker Compose (Development)
+# =============================================================================
+# Local development environment with all services
+#
+# USAGE:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d api worker   # Start specific services
+#   docker-compose logs -f api        # Follow logs
+#   docker-compose down               # Stop all services
+#   docker-compose down -v            # Stop and remove volumes
+# =============================================================================
+
+version: '3.9'
+
+services:
+  # ===========================================================================
+  # API Service
+  # ===========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: ssi-shadow-api
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      - APP_ENV=development
+      - APP_PORT=8080
+      - METRICS_PORT=9090
+      - LOG_LEVEL=DEBUG
+      - LOG_FORMAT=text
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      # Feature flags
+      - ENABLE_TRUST_SCORE=true
+      - ENABLE_ML_PREDICTIONS=true
+      - ENABLE_BID_OPTIMIZATION=true
+      # Platforms (use test mode in dev)
+      - META_TEST_MODE=true
+      - TIKTOK_TEST_MODE=true
+      - GOOGLE_TEST_MODE=true
+    env_file:
+      - .env.local
+    volumes:
+      - ./shadow:/app/shadow:ro
+      - ./automation:/app/automation:ro
+      - ./ml:/app/ml:ro
+      - ./ads_engine:/app/ads_engine:ro
+      - ./api:/app/api:ro
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - ssi-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Worker Service
+  # ===========================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    container_name: ssi-shadow-worker
+    environment:
+      - APP_ENV=development
+      - APP_MODE=worker
+      - WORKER_CONCURRENCY=2
+      - WORKER_QUEUE=default,priority
+      - LOG_LEVEL=DEBUG
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env.local
+    volumes:
+      - ./shadow:/app/shadow:ro
+      - ./automation:/app/automation:ro
+      - ./ml:/app/ml:ro
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  # ===========================================================================
+  # Dashboard (Frontend)
+  # ===========================================================================
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.dev
+    container_name: ssi-shadow-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+      - VITE_ENVIRONMENT=development
+    volumes:
+      - ./dashboard/src:/app/src:ro
+      - ./dashboard/public:/app/public:ro
+    depends_on:
+      - api
+    networks:
+      - ssi-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Redis
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ssi-shadow-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ssi-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # PostgreSQL (Optional - for local caching)
+  # ===========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: ssi-shadow-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=ssi_shadow
+      - POSTGRES_USER=ssi_shadow
+      - POSTGRES_PASSWORD=dev_password_change_me
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ssi_shadow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    profiles:
+      - with-postgres
+
+  # ===========================================================================
+  # Prometheus (Metrics)
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: ssi-shadow-prometheus
+    ports:
+      - "9091:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # ===========================================================================
+  # Grafana (Dashboards)
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: ssi-shadow-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # ===========================================================================
+  # Jaeger (Tracing)
+  # ===========================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: ssi-shadow-jaeger
+    ports:
+      - "16686:16686"  # UI
+      - "14268:14268"  # Collector HTTP
+      - "6831:6831/udp"  # Agent compact thrift
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # ===========================================================================
+  # Nginx (Reverse Proxy)
+  # ===========================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: ssi-shadow-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - dashboard
+    networks:
+      - ssi-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  ssi-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

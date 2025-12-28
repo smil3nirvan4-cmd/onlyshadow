@@ -1,0 +1,36 @@
+apiVersion: v2
+name: ssi-shadow
+description: S.S.I. SHADOW - Server-Side Intelligence for Ad Optimization
+type: application
+version: 1.0.0
+appVersion: "2.0.0"
+
+keywords:
+  - analytics
+  - ads
+  - machine-learning
+  - bigquery
+  - cloudflare
+
+maintainers:
+  - name: SSI Shadow Team
+    email: team@ssi-shadow.io
+
+dependencies:
+  - name: redis
+    version: "18.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+  
+  - name: postgresql
+    version: "13.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://github.com/your-org/ssi-shadow/docs
+    - name: Support
+      url: https://github.com/your-org/ssi-shadow/issues

@@ -1,0 +1,136 @@
+version: 2
+
+# =============================================================================
+# SOURCES: Tabelas originais do BigQuery
+# =============================================================================
+sources:
+  - name: raw
+    database: "{{ var('project_id') }}"
+    schema: ssi_shadow
+    tables:
+      - name: events
+        description: "Eventos capturados pelo Ghost Script"
+        columns:
+          - name: event_id
+            description: "ID único do evento"
+            tests:
+              - unique
+              - not_null
+          
+          - name: event_name
+            description: "Tipo de evento"
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['PageView', 'ViewContent', 'AddToCart', 'InitiateCheckout', 'Purchase', 'Lead', 'SSI_HighIntent', 'SSI_Hydrated']
+          
+          - name: ssi_id
+            description: "ID do visitante SSI"
+            tests:
+              - not_null
+          
+          - name: event_time
+            description: "Timestamp do evento"
+            tests:
+              - not_null
+          
+          - name: trust_score
+            description: "Score de confiança (0-1)"
+            tests:
+              - dbt_utils.accepted_range:
+                  min_value: 0
+                  max_value: 1
+                  inclusive: true
+          
+          - name: url
+            description: "URL da página"
+            tests:
+              - not_null
+
+      - name: sessions
+        description: "Sessões agregadas"
+        
+      - name: users
+        description: "Usuários únicos"
+        columns:
+          - name: ssi_id
+            tests:
+              - unique
+              - not_null
+
+      - name: predictions
+        description: "Predições dos modelos ML"
+
+# =============================================================================
+# MODELS: Transformações
+# =============================================================================
+models:
+  # ---------------------------------------------------------------------------
+  # Staging
+  # ---------------------------------------------------------------------------
+  - name: stg_events
+    description: "Eventos limpos e validados"
+    columns:
+      - name: event_id
+        tests:
+          - unique
+          - not_null
+      - name: trust_score
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.recency:
+          datepart: hour
+          field: event_time
+          interval: 4
+          config:
+            severity: warn
+
+  - name: stg_conversions
+    description: "Apenas eventos de conversão"
+    columns:
+      - name: event_id
+        tests:
+          - unique
+      - name: value
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+
+  # ---------------------------------------------------------------------------
+  # Marts
+  # ---------------------------------------------------------------------------
+  - name: mart_user_ltv
+    description: "LTV calculado por usuário"
+    columns:
+      - name: ssi_id
+        tests:
+          - unique
+          - not_null
+      - name: total_value
+        tests:
+          - not_null
+      - name: ltv_segment
+        tests:
+          - accepted_values:
+              values: ['whale', 'high', 'medium', 'low', 'zero']
+
+  - name: mart_daily_metrics
+    description: "Métricas agregadas por dia"
+    columns:
+      - name: date
+        tests:
+          - unique
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "total_events > 0"
+
+  - name: mart_campaign_performance
+    description: "Performance por campanha"
+    columns:
+      - name: campaign_id
+        tests:
+          - not_null

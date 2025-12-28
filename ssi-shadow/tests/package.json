@@ -1,0 +1,49 @@
+{
+  "name": "ssi-shadow-tests",
+  "version": "1.0.0",
+  "description": "S.S.I. SHADOW Test Suite",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:integration",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    
+    "test:unit": "npm run test:unit:ts && npm run test:unit:py",
+    "test:unit:ts": "vitest run --coverage",
+    "test:unit:ts:watch": "vitest --watch",
+    "test:unit:py": "pytest tests/unit/python -v --cov=ads_engine --cov=ml --cov=automation --cov-report=html:coverage/python",
+    
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
+    
+    "test:load": "k6 run tests/load/worker-load.js",
+    "test:load:spike": "k6 run -e SCENARIO=spike tests/load/worker-load.js",
+    "test:load:soak": "k6 run -e SCENARIO=soak tests/load/worker-load.js",
+    "test:load:stress": "k6 run -e SCENARIO=stress tests/load/worker-load.js",
+    
+    "test:coverage": "npm run test:unit:ts -- --coverage && npm run test:unit:py",
+    "test:coverage:report": "open coverage/workers/index.html && open coverage/python/index.html",
+    
+    "lint": "npm run lint:ts && npm run lint:py",
+    "lint:ts": "eslint 'workers/**/*.ts' 'tests/**/*.ts' --fix",
+    "lint:py": "black ads_engine ml automation tests/unit/python && isort ads_engine ml automation tests/unit/python && flake8 ads_engine ml automation",
+    
+    "typecheck": "tsc --noEmit",
+    "typecheck:py": "mypy ads_engine ml automation"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "eslint": "^8.55.0",
+    "miniflare": "^3.20231218.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

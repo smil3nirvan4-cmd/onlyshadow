@@ -1,0 +1,14 @@
+name = "ssi-shadow-gateway"
+main = "worker.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+API_URL = "https://api.ssi-shadow.io"
+
+[env.staging]
+name = "ssi-shadow-gateway-staging"
+vars = { API_URL = "https://staging-api.ssi-shadow.io" }
+
+[env.production]
+name = "ssi-shadow-gateway"
+vars = { API_URL = "https://api.ssi-shadow.io" }

@@ -1,0 +1,212 @@
+# =============================================================================
+# S.S.I. SHADOW - Production Dockerfile
+# =============================================================================
+# Multi-stage build for optimized production image
+# Supports: AMD64, ARM64 (for Shadow Cloud free tier)
+# 
+# BUILD:
+#   docker build -t ssi-shadow:latest -f Dockerfile.production .
+#
+# BUILD WITH CACHE:
+#   docker build --build-arg BUILDKIT_INLINE_CACHE=1 \
+#     -t ssi-shadow:latest -f Dockerfile.production .
+#
+# MULTI-ARCH BUILD:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t ssi-shadow:latest -f Dockerfile.production . --push
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Python Dependencies Builder
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS python-builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libffi-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements
+COPY requirements.txt .
+COPY shadow/requirements.txt ./shadow-requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r shadow-requirements.txt
+
+# Install ML and analytics dependencies
+RUN pip install --no-cache-dir \
+    google-cloud-bigquery==3.14.0 \
+    google-cloud-aiplatform==1.38.0 \
+    google-cloud-storage==2.13.0 \
+    pandas==2.1.4 \
+    numpy==1.26.2 \
+    scikit-learn==1.3.2 \
+    xgboost==2.0.2 \
+    onnxruntime==1.16.3 \
+    httpx==0.25.2 \
+    aiohttp==3.9.1 \
+    prometheus-client==0.19.0
+
+# -----------------------------------------------------------------------------
+# Stage 2: Node.js Builder (for Dashboard)
+# -----------------------------------------------------------------------------
+FROM node:20-alpine AS node-builder
+
+WORKDIR /build
+
+# Copy dashboard source
+COPY dashboard/package*.json ./dashboard/
+RUN cd dashboard && npm ci --only=production
+
+COPY dashboard/ ./dashboard/
+
+# Build dashboard
+RUN cd dashboard && npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 3: Production Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+# Build arguments
+ARG BUILD_DATE
+ARG GIT_COMMIT
+ARG VERSION
+
+# Labels (OCI standard)
+LABEL org.opencontainers.image.title="S.S.I. SHADOW"
+LABEL org.opencontainers.image.description="Server-Side Intelligence Shadow - ML-powered ad optimization"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+LABEL org.opencontainers.image.vendor="SSI Shadow"
+LABEL org.opencontainers.image.source="https://github.com/your-org/ssi-shadow"
+
+# Environment configuration
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # App configuration
+    APP_ENV=production \
+    APP_PORT=8080 \
+    METRICS_PORT=9090 \
+    LOG_LEVEL=INFO \
+    LOG_FORMAT=json \
+    # GCP
+    GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/sa-key.json \
+    # Python
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    dumb-init \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder
+COPY --from=python-builder /opt/venv /opt/venv
+
+# Copy dashboard build
+COPY --from=node-builder /build/dashboard/dist /app/static/dashboard
+
+# Create directories
+RUN mkdir -p /app/credentials /app/logs /app/data /app/models
+
+# Copy application code
+COPY shadow/ ./shadow/
+COPY automation/ ./automation/
+COPY ml/ ./ml/
+COPY ads_engine/ ./ads_engine/
+COPY cdp/ ./cdp/
+COPY attribution/ ./attribution/
+COPY integrations/ ./integrations/
+COPY monitoring/ ./monitoring/
+COPY api/ ./api/
+
+# Copy configuration files
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
+# Create non-root user
+RUN groupadd -r shadow -g 1000 && \
+    useradd -r -g shadow -u 1000 -d /app -s /sbin/nologin shadow && \
+    chown -R shadow:shadow /app
+
+# Switch to non-root user
+USER shadow
+
+# Expose ports
+EXPOSE 8080 9090
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${APP_PORT}/health || exit 1
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["./docker-entrypoint.sh", "api"]
+
+# -----------------------------------------------------------------------------
+# Stage 4: Worker Image (for background jobs)
+# -----------------------------------------------------------------------------
+FROM runtime AS worker
+
+# Worker-specific configuration
+ENV APP_MODE=worker \
+    WORKER_CONCURRENCY=4 \
+    WORKER_QUEUE=default
+
+CMD ["./docker-entrypoint.sh", "worker"]
+
+# -----------------------------------------------------------------------------
+# Stage 5: Scheduler Image (for cron jobs)
+# -----------------------------------------------------------------------------
+FROM runtime AS scheduler
+
+# Scheduler-specific configuration
+ENV APP_MODE=scheduler
+
+# Install cron
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends cron && \
+    rm -rf /var/lib/apt/lists/*
+USER shadow
+
+CMD ["./docker-entrypoint.sh", "scheduler"]
+
+# -----------------------------------------------------------------------------
+# Stage 6: ML Training Image (with GPU support)
+# -----------------------------------------------------------------------------
+FROM runtime AS ml-trainer
+
+# ML-specific configuration
+ENV APP_MODE=ml-trainer \
+    TF_CPP_MIN_LOG_LEVEL=2
+
+# Install additional ML dependencies
+USER root
+RUN pip install --no-cache-dir \
+    torch==2.1.1 \
+    tensorflow==2.15.0 \
+    transformers==4.36.0 \
+    optuna==3.5.0
+USER shadow
+
+CMD ["./docker-entrypoint.sh", "ml-train"]

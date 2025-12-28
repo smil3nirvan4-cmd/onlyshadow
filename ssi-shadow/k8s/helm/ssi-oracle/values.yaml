@@ -1,0 +1,495 @@
+# =============================================================================
+# S.S.I. SHADOW - Helm Values
+# =============================================================================
+# Default configuration values for the SSI Shadow Helm chart
+# Override these values in values-staging.yaml or values-production.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Global Configuration
+# -----------------------------------------------------------------------------
+global:
+  # Environment: development, staging, production
+  environment: production
+  
+  # Image registry
+  imageRegistry: ""
+  imagePullSecrets: []
+  
+  # Storage class for persistent volumes
+  storageClass: ""
+
+# -----------------------------------------------------------------------------
+# API Service
+# -----------------------------------------------------------------------------
+api:
+  enabled: true
+  
+  replicaCount: 3
+  
+  image:
+    repository: ssi-shadow
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  # Container ports
+  ports:
+    http: 8080
+    metrics: 9090
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Percent
+            value: 10
+            periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+          - type: Pods
+            value: 4
+            periodSeconds: 15
+        selectPolicy: Max
+  
+  # Probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  
+  # Node selector and affinity
+  nodeSelector: {}
+  
+  tolerations: []
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - ssi-shadow-api
+            topologyKey: kubernetes.io/hostname
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+
+# -----------------------------------------------------------------------------
+# Worker Service (Background Jobs)
+# -----------------------------------------------------------------------------
+worker:
+  enabled: true
+  
+  replicaCount: 2
+  
+  image:
+    repository: ssi-shadow
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  command: ["./docker-entrypoint.sh", "worker"]
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    # Scale based on queue length (requires KEDA)
+    metrics:
+      - type: External
+        external:
+          metric:
+            name: redis_queue_length
+          target:
+            type: AverageValue
+            averageValue: 100
+  
+  # Environment variables
+  env:
+    WORKER_CONCURRENCY: "4"
+    WORKER_QUEUE: "default,priority,ml"
+
+# -----------------------------------------------------------------------------
+# Scheduler Service (Cron Jobs)
+# -----------------------------------------------------------------------------
+scheduler:
+  enabled: true
+  
+  replicaCount: 1
+  
+  image:
+    repository: ssi-shadow
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  command: ["./docker-entrypoint.sh", "scheduler"]
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  # Scheduled jobs
+  jobs:
+    - name: sync-platform-costs
+      schedule: "0 */6 * * *"
+      command: ["python", "-m", "shadow.jobs.sync_costs"]
+    
+    - name: update-ml-predictions
+      schedule: "0 4 * * *"
+      command: ["python", "-m", "ml.jobs.update_predictions"]
+    
+    - name: cleanup-old-data
+      schedule: "0 2 * * 0"
+      command: ["python", "-m", "shadow.jobs.cleanup"]
+    
+    - name: generate-reports
+      schedule: "0 8 * * *"
+      command: ["python", "-m", "shadow.jobs.reports"]
+
+# -----------------------------------------------------------------------------
+# ML Trainer (GPU Jobs)
+# -----------------------------------------------------------------------------
+mlTrainer:
+  enabled: false
+  
+  image:
+    repository: ssi-shadow
+    tag: ml-trainer
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 2000m
+      memory: 8Gi
+      nvidia.com/gpu: 1
+    limits:
+      cpu: 8000m
+      memory: 32Gi
+      nvidia.com/gpu: 1
+  
+  nodeSelector:
+    cloud.google.com/gke-accelerator: nvidia-tesla-t4
+  
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+# -----------------------------------------------------------------------------
+# Ingress Configuration
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  
+  className: nginx
+  
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  
+  hosts:
+    - host: api.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api
+    
+    - host: dashboard.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+  
+  tls:
+    - secretName: ssi-shadow-tls
+      hosts:
+        - api.ssi-shadow.io
+        - dashboard.ssi-shadow.io
+
+# -----------------------------------------------------------------------------
+# Dashboard (Static Files)
+# -----------------------------------------------------------------------------
+dashboard:
+  enabled: true
+  
+  replicaCount: 2
+  
+  image:
+    repository: nginx
+    tag: alpine
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  
+  service:
+    type: ClusterIP
+    port: 80
+
+# -----------------------------------------------------------------------------
+# Secrets Configuration
+# -----------------------------------------------------------------------------
+secrets:
+  # Create secrets from values (not recommended for production)
+  create: false
+  
+  # External secret store (recommended)
+  externalSecrets:
+    enabled: true
+    secretStoreRef:
+      name: gcp-secret-manager
+      kind: ClusterSecretStore
+  
+  # Secret names
+  names:
+    meta: ssi-shadow-meta-credentials
+    tiktok: ssi-shadow-tiktok-credentials
+    google: ssi-shadow-google-credentials
+    gcp: ssi-shadow-gcp-credentials
+
+# -----------------------------------------------------------------------------
+# ConfigMap Configuration
+# -----------------------------------------------------------------------------
+config:
+  # Logging
+  logLevel: INFO
+  logFormat: json
+  
+  # Feature flags
+  features:
+    enableTrustScore: true
+    enableMLPredictions: true
+    enableBidOptimization: true
+    enableCostSync: true
+  
+  # Rate limiting
+  rateLimiting:
+    enabled: true
+    requestsPerMinute: 1000
+    burstSize: 100
+  
+  # Platforms
+  platforms:
+    meta:
+      enabled: true
+      testMode: false
+    tiktok:
+      enabled: true
+      testMode: false
+    google:
+      enabled: true
+      testMode: false
+
+# -----------------------------------------------------------------------------
+# Service Account
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ssi-shadow
+  annotations:
+    iam.gke.io/gcp-service-account: ssi-shadow@PROJECT_ID.iam.gserviceaccount.com
+
+# -----------------------------------------------------------------------------
+# RBAC
+# -----------------------------------------------------------------------------
+rbac:
+  create: true
+
+# -----------------------------------------------------------------------------
+# Network Policies
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  
+  # Allow ingress from ingress controller
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  
+  # Allow egress to external services
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+
+# -----------------------------------------------------------------------------
+# Pod Security
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  # Prometheus ServiceMonitor
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus
+  
+  # Grafana dashboards
+  grafanaDashboards:
+    enabled: true
+  
+  # Alerting rules
+  prometheusRules:
+    enabled: true
+    rules:
+      - alert: SSIShadowHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="ssi-shadow",status=~"5.."}[5m])) /
+          sum(rate(http_requests_total{job="ssi-shadow"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate in SSI Shadow
+          description: Error rate is above 5% for more than 5 minutes
+      
+      - alert: SSIShadowHighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="ssi-shadow"}[5m])) by (le)) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High latency in SSI Shadow
+          description: P95 latency is above 500ms for more than 10 minutes
+
+# -----------------------------------------------------------------------------
+# Redis (Dependency)
+# -----------------------------------------------------------------------------
+redis:
+  enabled: true
+  
+  architecture: standalone
+  
+  auth:
+    enabled: true
+    existingSecret: ssi-shadow-redis
+  
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+# -----------------------------------------------------------------------------
+# PostgreSQL (Dependency) - Optional
+# -----------------------------------------------------------------------------
+postgresql:
+  enabled: false
+  
+  auth:
+    existingSecret: ssi-shadow-postgresql
+    database: ssi_shadow
+  
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi

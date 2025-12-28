@@ -1,0 +1,159 @@
+# =============================================================================
+# S.S.I. SHADOW - Helm Values (Staging)
+# =============================================================================
+# Override values for staging environment
+# Usage: helm install ssi-shadow ./k8s/helm/ssi-shadow -f values-staging.yaml
+# =============================================================================
+
+global:
+  environment: staging
+  imageRegistry: gcr.io/YOUR_PROJECT_ID
+
+# API - reduced resources for staging
+api:
+  replicaCount: 2
+  
+  image:
+    tag: staging
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+
+# Worker - reduced for staging
+worker:
+  replicaCount: 1
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  autoscaling:
+    enabled: false
+
+# Scheduler
+scheduler:
+  enabled: true
+  replicaCount: 1
+
+# Ingress - staging URLs
+ingress:
+  enabled: true
+  
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  
+  hosts:
+    - host: api-staging.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api
+    
+    - host: dashboard-staging.ssi-shadow.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+  
+  tls:
+    - secretName: ssi-shadow-staging-tls
+      hosts:
+        - api-staging.ssi-shadow.io
+        - dashboard-staging.ssi-shadow.io
+
+# Dashboard
+dashboard:
+  replicaCount: 1
+  
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# Configuration
+config:
+  logLevel: DEBUG
+  logFormat: json
+  
+  features:
+    enableTrustScore: true
+    enableMLPredictions: true
+    enableBidOptimization: true
+    enableCostSync: true
+  
+  rateLimiting:
+    enabled: true
+    requestsPerMinute: 500
+    burstSize: 50
+  
+  # Use test mode for platforms
+  platforms:
+    meta:
+      enabled: true
+      testMode: true
+    tiktok:
+      enabled: true
+      testMode: true
+    google:
+      enabled: true
+      testMode: true
+
+# Secrets - staging credentials
+secrets:
+  names:
+    meta: ssi-shadow-meta-credentials-staging
+    tiktok: ssi-shadow-tiktok-credentials-staging
+    google: ssi-shadow-google-credentials-staging
+    gcp: ssi-shadow-gcp-credentials-staging
+
+# Monitoring - enabled but reduced retention
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 60s
+  
+  grafanaDashboards:
+    enabled: true
+  
+  prometheusRules:
+    enabled: true
+
+# Redis - smaller for staging
+redis:
+  enabled: true
+  
+  master:
+    persistence:
+      enabled: true
+      size: 2Gi
+    
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# PostgreSQL - disabled in staging (use BigQuery)
+postgresql:
+  enabled: false
