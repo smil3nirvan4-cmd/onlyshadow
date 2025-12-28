@@ -3,10 +3,36 @@
 // ============================================================================
 
 import React from 'react';
-import Dashboard from './components/Dashboard';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { Layout } from './components/Layout';
+import { Dashboard } from './components/Dashboard';
+import { Login } from './components/Login';
 
-function App() {
-  return <Dashboard />;
-}
+// Componente de Proteção de Rota
+const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-blue-500">Loading Shadow Protocol...</div>;
+  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+};
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={
+            <PrivateRoute>
+              <Layout />
+            </PrivateRoute>
+          }>
+            <Route index element={<Dashboard />} />
+            <Route path="ads" element={<div className="p-8 text-white">Ads Engine Module (Coming Soon)</div>} />
+            <Route path="tracking" element={<div className="p-8 text-white">Ghost Workers Module (Coming Soon)</div>} />
+          </Route>
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
+  );
+};
